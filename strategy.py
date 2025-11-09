@@ -250,4 +250,4 @@ if __name__ == "__main__":
     print("4. Use self.collector to analyze data")
     
     # Uncomment to run:
-    # run_strategy(AdaptiveStrategy, explore_trips=30)
+    run_strategy(SimpleGreedyStrategy, explore_trips=30)
