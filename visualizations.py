@@ -1,6 +1,8 @@
 """
 Visualization functions for the Morty Express Challenge.
 """
+import matplotlib
+matplotlib.use('TkAgg')  # ou 'Qt5Agg'
 
 import matplotlib.pyplot as plt
 import seaborn as sns

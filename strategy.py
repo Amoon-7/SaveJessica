@@ -12,6 +12,7 @@ changing conditions.
 from api_client import SphinxAPIClient
 from data_collector import DataCollector
 import pandas as pd
+import numpy as np
 
 
 class MortyRescueStrategy:
@@ -201,6 +202,128 @@ class AdaptiveStrategy(MortyRescueStrategy):
         print(f"Success Rate: {(final_status['morties_on_planet_jessica']/1000)*100:.2f}%")
 
 
+
+class UCBStratery(MortyRescueStrategy):
+    """
+    Upper Confidence Bound (UCB) strategy for exploration-exploitation trade-off.
+    """
+    def __init__(self, client: SphinxAPIClient, exploration_constant: float = 2.0):
+        """
+        Initialize UCB strategy.
+        
+        Args:
+            client: SphinxAPIClient instance
+            exploration_constant: Controls exploration vs exploitation trade-off
+        """
+        super().__init__(client)
+        self.c = exploration_constant
+        
+        # Track successes and attempts for each action
+        self.successes = {
+            (0, 1): 0, (0, 2): 0, (0, 3): 0,
+            (1, 1): 0, (1, 2): 0, (1, 3): 0,
+            (2, 1): 0, (2, 2): 0, (2, 3): 0,
+        }
+        self.attempts = {
+            (0, 1): 0, (0, 2): 0, (0, 3): 0,
+            (1, 1): 0, (1, 2): 0, (1, 3): 0,
+            (2, 1): 0, (2, 2): 0, (2, 3): 0,
+        }
+        
+        self.total_trips = 0
+        self.planet_names = ['Gazorpazorp', 'Purge Planet', 'Planet Squanch']
+
+
+
+    def compute_ucb_scores(self) -> float:
+        """
+        Compute the UCB value for a given action.
+        
+        Args:
+            action: Tuple of (planet_index, morties_sent)
+        """
+        ucb_scores = {}
+        for key in self.successes.keys():
+            if self.attempts[key] == 0:
+                # Unvisited actions get infinite score
+                ucb_scores[key] = float('inf')
+            else:
+                # UCB1 formula
+                mean_reward = self.successes[key] / self.attempts[key]
+                exploration_bonus = np.sqrt(
+                    (self.c * np.log(self.total_trips)) / self.attempts[key]
+                )
+                ucb_scores[key] = mean_reward + exploration_bonus
+
+        return ucb_scores
+        
+
+    def update_statistics(self, planet: int, morty_count: int, 
+                          survived: int, total: int):
+        """Update statistics based on outcome."""
+        key = (planet, morty_count)
+        self.successes[key] += survived
+        self.attempts[key] += total
+        self.total_trips += 1
+
+
+    def select_action(self, morties_remaining: int) -> tuple:
+        """
+        Select action with highest UCB score.
+        
+        Args:
+            morties_remaining: Number of Morties left
+            
+        Returns:
+            Tuple of (planet_id, morty_count)
+        """
+        ucb_scores = self.compute_ucb_scores()
+        
+        # Filter valid actions
+        valid_actions = {
+            k: v * k[1]  # Scale by number of Morties
+            for k, v in ucb_scores.items()
+            if k[1] <= morties_remaining
+        }
+        
+        best_action = max(valid_actions.items(), key=lambda x: x[1])
+        return best_action[0]
+
+    def execute_strategy(self, verbose: bool = True, report_every: int = 50):
+        """Execute UCB strategy."""
+        print("\n=== EXECUTING UCB STRATEGY ===")
+        
+        status = self.client.get_status()
+        morties_remaining = status['morties_in_citadel']
+        
+        while morties_remaining > 0:
+            # Select action
+            planet, morty_count = self.select_action(morties_remaining)
+            
+            # Execute
+            result = self.client.send_morties(planet, morty_count)
+            survived = morty_count if result['survived'] else 0
+            
+            # Update
+            self.update_statistics(planet, morty_count, survived, morty_count)
+            morties_remaining = result['morties_in_citadel']
+            
+            # Report
+            if verbose and self.total_trips % report_every == 0:
+                print(f"Trip {self.total_trips}: "
+                      f"{self.planet_names[planet]} × {morty_count}, "
+                      f"Saved: {result['morties_on_planet_jessica']}")
+        
+        # Final results
+        final_status = self.client.get_status()
+        print("\n=== FINAL RESULTS ===")
+        print(f"Morties Saved: {final_status['morties_on_planet_jessica']}")
+        print(f"Success Rate: {(final_status['morties_on_planet_jessica']/1000)*100:.2f}%")
+
+
+
+
+
 def run_strategy(strategy_class, explore_trips: int = 30):
     """
     Run a complete strategy from exploration to execution.
@@ -250,4 +373,4 @@ if __name__ == "__main__":
     print("4. Use self.collector to analyze data")
     
     # Uncomment to run:
-    run_strategy(SimpleGreedyStrategy, explore_trips=30)
+    run_strategy(UCBStratery, explore_trips=30)
