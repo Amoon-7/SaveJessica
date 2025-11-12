@@ -128,7 +128,7 @@ def print_metrics(metrics: Dict):
         print(f"  Steps Taken: {status['steps_taken']}")
         
         success_rate = (status['morties_on_planet_jessica'] / 1000) * 100
-        print(f"\n  🎯 Success Rate: {success_rate:.2f}%")
+        print(f"\n    Success Rate: {success_rate:.2f}%")
     
     print("\n" + "="*60)
 
@@ -170,34 +170,6 @@ def compare_strategies(results_files: List[str]):
     else:
         print("No valid results files found")
 
-
-def estimate_leaderboard_position(success_rate: float) -> str:
-    """
-    Estimate leaderboard position based on success rate.
-    (Based on leaderboard data from the website)
-    
-    Args:
-        success_rate: Success rate as percentage (0-100)
-        
-    Returns:
-        Estimated position range
-    """
-    if success_rate >= 90:
-        return "🥇 Top 1 (90%+)"
-    elif success_rate >= 87:
-        return "🥈 Top 3 (87-90%)"
-    elif success_rate >= 82:
-        return "🥉 Top 10 (82-87%)"
-    elif success_rate >= 75:
-        return "📊 Top 20 (75-82%)"
-    elif success_rate >= 70:
-        return "📊 Top 40 (70-75%)"
-    elif success_rate >= 60:
-        return "📊 Top 60 (60-70%)"
-    else:
-        return "📊 Below Top 60 (<60%)"
-
-
 def print_episode_summary(final_status: Dict):
     """
     Print a formatted summary of the episode.
@@ -213,33 +185,16 @@ def print_episode_summary(final_status: Dict):
     success_rate = (saved / 1000) * 100
     
     print("\n" + "="*60)
-    print("🚀 EPISODE COMPLETE!")
+    print("  EPISODE COMPLETE!")
     print("="*60)
     
-    print(f"\n📊 Final Results:")
-    print(f"   ✅ Morties Saved: {saved}/1000 ({success_rate:.2f}%)")
-    print(f"   ❌ Morties Lost: {lost}")
-    print(f"   🏰 Remaining in Citadel: {in_citadel}")
-    print(f"   👣 Steps Taken: {steps}")
-    
-    print(f"\n🏆 Estimated Position: {estimate_leaderboard_position(success_rate)}")
+    print(f"\n  Final Results:")
+    print(f"     Morties Saved: {saved}/1000 ({success_rate:.2f}%)")
+    print(f"     Morties Lost: {lost}")
+    print(f"     Remaining in Citadel: {in_citadel}")
+    print(f"     Steps Taken: {steps}")
     
     print("\n" + "="*60)
-    
-    # Victory message based on performance
-    if success_rate >= 90:
-        print("🎉 INCREDIBLE! You're competing for first place!")
-    elif success_rate >= 80:
-        print("🎊 EXCELLENT! You're in the top tier!")
-    elif success_rate >= 70:
-        print("👏 GREAT JOB! Solid performance!")
-    elif success_rate >= 60:
-        print("👍 GOOD START! Keep improving!")
-    else:
-        print("💪 KEEP TRYING! Analyze the data and try again!")
-    
-    print("="*60 + "\n")
-
 
 def create_experiment_log():
     """
@@ -293,24 +248,6 @@ PLANET_NAMES = {
     1: "Cronenberg World",
     2: "The Purge Planet"
 }
-
-
-def get_planet_emoji(planet: int) -> str:
-    """
-    Get an emoji representation for a planet.
-    
-    Args:
-        planet: Planet index (0, 1, or 2)
-        
-    Returns:
-        Emoji string
-    """
-    emojis = {
-        0: "🌽",  # On a Cob
-        1: "🧟",  # Cronenberg
-        2: "🔪"   # Purge Planet
-    }
-    return emojis.get(planet, "🌍")
 
 
 if __name__ == "__main__":
