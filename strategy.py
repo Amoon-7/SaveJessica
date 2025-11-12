@@ -15,8 +15,10 @@ from data_collector import DataCollector
 import pandas as pd
 import numpy as np
 from experiments.kalman_ticket_bandit import KalmanTicketBandit
+from experiments.beta_bandit import DecayingBetaBandit
 import matplotlib.pyplot as plt
 from visualizations import plot_moving_average
+import os
 
 class MortyRescueStrategy(ABC):
     """Abstract base class for implementing rescue strategies."""
@@ -344,13 +346,17 @@ class KalmanStrategy(MortyRescueStrategy):
         estimates = []
         uncertainties = []
 
+        planet = 0  # Fixed planet for this example
+        morties_to_send = 1  # Send 1 Morty per trip
+
         while morties_remaining > 0:
-            planet, morties_to_send, _ = self.kalman_bandit.select_action()
+            # planet, morties_to_send, _ = self.kalman_bandit.select_action()
             morties_to_send = min(morties_to_send, morties_remaining)
             
             # Send Morties
             result = self.client.send_morties(int(planet), int(morties_to_send))
             result["planet"] = int(planet)
+            result["planet_name"] = self.client.get_planet_name(int(planet))
             self.collector.trips_data.append(result)
 
             # Update bandit state
@@ -366,26 +372,78 @@ class KalmanStrategy(MortyRescueStrategy):
                       f"{result['morties_on_planet_jessica']} saved, "
                       f"{morties_remaining} remaining")
 
-        self.collector.save_data("data/kalman_real.csv")
+        if os.path.exists("data") == False:
+            os.makedirs("data")
+        if os.path.exists("plots") == False:
+            os.makedirs("plots")
+
+        self.collector.save_data("data/kalman_real_0.csv")
 
         # Plot kalman estimates
-        print(estimates)
         estimates = np.array(estimates)
         uncertainties = np.array(uncertainties)
 
-        for i in range(3):
-            plt.plot(estimates[:, i], label=f"Estimate (arm {i})", color=f"C{i}")
-            plt.fill_between(range(trips_made),
-                                estimates[:, i] - np.sqrt(uncertainties[:, i]),
-                                estimates[:, i] + np.sqrt(uncertainties[:, i]),
-                                alpha=0.2, color=f"C{i}")
+        i = 0
+        plt.plot(estimates[:, i], label=f"Estimate (arm {i})", color=f"C{i}")
+        plt.fill_between(range(trips_made),
+                            estimates[:, i] - np.sqrt(uncertainties[:, i]),
+                            estimates[:, i] + np.sqrt(uncertainties[:, i]),
+                            alpha=0.2, color=f"C{i}")
         plt.title("Estimated Success Probabilities")
         plt.legend(loc="best")
         plt.grid(True)
 
         plt.tight_layout()
         #plt.show()
-        plt.savefig("plots/kalman_estimates.png")
+        plt.savefig("plots/kalman_estimates_0.png")
+
+        # Final status
+        final_status = self.client.get_status()
+        print("\n=== FINAL RESULTS ===")
+        print(f"Morties Saved: {final_status['morties_on_planet_jessica']}")
+        print(f"Morties Lost: {final_status['morties_lost']}")
+        print(f"Total Steps: {final_status['steps_taken']}")
+        print(f"Success Rate: {(final_status['morties_on_planet_jessica']/1000)*100:.2f}%")
+
+class DecayingBetaStrategy(MortyRescueStrategy):
+
+    def __init__(self, client: SphinxAPIClient):
+        super().__init__(client)
+        self.beta_bandit = DecayingBetaBandit(
+            n_arms=3, decay=0.02, exploration_constant=2.0, min_alpha_beta=0.0
+        )
+
+    def explore_phase(self, trips_per_planet=0):
+        # No exploration needed for this strategy
+        pass
+
+    def execute_strategy(self):
+        print("\n=== EXECUTING DECAYING-BETA STRATEGY ===")
+        
+        status = self.client.get_status()
+        morties_remaining = status['morties_in_citadel']
+        trips_made = 0
+
+        while morties_remaining > 0:
+            planet, morties_to_send, _ = self.beta_bandit.select_action()
+            morties_to_send = min(morties_to_send, morties_remaining)
+            
+            # Send Morties
+            result = self.client.send_morties(int(planet), int(morties_to_send))
+            result["planet"] = int(planet)
+            result["planet_name"] = self.client.get_planet_name(int(planet))
+            self.collector.trips_data.append(result)
+
+            # Update bandit state
+            self.beta_bandit.update(planet, result["survived"])
+
+            morties_remaining = result['morties_in_citadel']
+            trips_made += 1
+            
+            if trips_made % 50 == 0:
+                print(f"  Progress: {trips_made} trips, "
+                      f"{result['morties_on_planet_jessica']} saved, "
+                      f"{morties_remaining} remaining")
 
         # Final status
         final_status = self.client.get_status()
@@ -445,9 +503,13 @@ if __name__ == "__main__":
     print("4. Use self.collector to analyze data")
     
     # Uncomment to run:
-    run_strategy(KalmanStrategy, explore_trips=0)
     # run_strategy(UCBStratery, explore_trips=30)
 
-    collector = DataCollector(SphinxAPIClient())
-    df = collector.load_data(filename="data/kalman_real.csv")
-    plot_moving_average(df)
+    # client = SphinxAPIClient()
+    # strategy = KalmanStrategy(client)
+    # # client.start_episode()
+    # # strategy.execute_strategy()
+    # df = strategy.collector.load_data(filename="data/kalman_real_0.csv")
+    # plot_moving_average(df, window=50, save_path="plots/real_0.png")
+
+    run_strategy(DecayingBetaStrategy, explore_trips=0)
