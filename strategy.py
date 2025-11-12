@@ -13,7 +13,9 @@ from api_client import SphinxAPIClient
 from data_collector import DataCollector
 import pandas as pd
 import numpy as np
-
+from experiments.kalman_ticket_bandit import KalmanTicketBandit
+import matplotlib.pyplot as plt
+from visualizations import plot_moving_average
 
 class MortyRescueStrategy:
     """Base class for implementing rescue strategies."""
@@ -320,9 +322,76 @@ class UCBStratery(MortyRescueStrategy):
         print(f"Morties Saved: {final_status['morties_on_planet_jessica']}")
         print(f"Success Rate: {(final_status['morties_on_planet_jessica']/1000)*100:.2f}%")
 
+class KalmanStrategy(MortyRescueStrategy):
+    
+    def __init__(self, client: SphinxAPIClient):
+        super().__init__(client)
+        self.kalman_bandit = KalmanTicketBandit(n_arms=3, q=0.01, r_min=0.001)
 
+    def explore_phase(self, trips_per_planet=0):
+        # No exploration needed for this strategy
+        pass
 
+    def execute_strategy(self):
+        print("\n=== EXECUTING KALMAN STRATEGY ===")
+        
+        status = self.client.get_status()
+        morties_remaining = status['morties_in_citadel']
+        trips_made = 0
 
+        estimates = []
+        uncertainties = []
+
+        while morties_remaining > 0:
+            planet, morties_to_send, _ = self.kalman_bandit.select_action()
+            morties_to_send = min(morties_to_send, morties_remaining)
+            
+            # Send Morties
+            result = self.client.send_morties(int(planet), int(morties_to_send))
+            result["planet"] = int(planet)
+            self.collector.trips_data.append(result)
+
+            # Update bandit state
+            self.kalman_bandit.update(planet, morties_to_send, result["survived"])
+            estimates.append(self.kalman_bandit.mu.copy())
+            uncertainties.append(self.kalman_bandit.P.copy())
+
+            morties_remaining = result['morties_in_citadel']
+            trips_made += 1
+            
+            if trips_made % 50 == 0:
+                print(f"  Progress: {trips_made} trips, "
+                      f"{result['morties_on_planet_jessica']} saved, "
+                      f"{morties_remaining} remaining")
+
+        self.collector.save_data("data/kalman_real.csv")
+
+        # Plot kalman estimates
+        print(estimates)
+        estimates = np.array(estimates)
+        uncertainties = np.array(uncertainties)
+
+        for i in range(3):
+            plt.plot(estimates[:, i], label=f"Estimate (arm {i})", color=f"C{i}")
+            plt.fill_between(range(trips_made),
+                                estimates[:, i] - np.sqrt(uncertainties[:, i]),
+                                estimates[:, i] + np.sqrt(uncertainties[:, i]),
+                                alpha=0.2, color=f"C{i}")
+        plt.title("Estimated Success Probabilities")
+        plt.legend(loc="best")
+        plt.grid(True)
+
+        plt.tight_layout()
+        #plt.show()
+        plt.savefig("plots/kalman_estimates.png")
+
+        # Final status
+        final_status = self.client.get_status()
+        print("\n=== FINAL RESULTS ===")
+        print(f"Morties Saved: {final_status['morties_on_planet_jessica']}")
+        print(f"Morties Lost: {final_status['morties_lost']}")
+        print(f"Total Steps: {final_status['steps_taken']}")
+        print(f"Success Rate: {(final_status['morties_on_planet_jessica']/1000)*100:.2f}%")
 
 def run_strategy(strategy_class, explore_trips: int = 30):
     """
@@ -340,15 +409,16 @@ def run_strategy(strategy_class, explore_trips: int = 30):
     print("Starting new episode...")
     client.start_episode()
     
-    # Exploration phase
-    strategy.explore_phase(trips_per_planet=explore_trips)
-    
-    # Analyze results
-    analysis = strategy.analyze_planets()
-    print("\nPlanet Analysis:")
-    for planet_name, data in analysis.items():
-        print(f"  {planet_name}: {data['overall_survival_rate']:.2f}% "
-              f"({data['trend']})")
+    if explore_trips > 0:
+        # Exploration phase
+        strategy.explore_phase(trips_per_planet=explore_trips)
+        
+        # Analyze results
+        analysis = strategy.analyze_planets()
+        print("\nPlanet Analysis:")
+        for planet_name, data in analysis.items():
+            print(f"  {planet_name}: {data['overall_survival_rate']:.2f}% "
+                f"({data['trend']})")
     
     # Execute strategy
     strategy.execute_strategy()
@@ -373,4 +443,9 @@ if __name__ == "__main__":
     print("4. Use self.collector to analyze data")
     
     # Uncomment to run:
-    run_strategy(UCBStratery, explore_trips=30)
+    run_strategy(KalmanStrategy, explore_trips=0)
+    # run_strategy(UCBStratery, explore_trips=30)
+
+    collector = DataCollector(SphinxAPIClient())
+    df = collector.load_data(filename="data/kalman_real.csv")
+    plot_moving_average(df)

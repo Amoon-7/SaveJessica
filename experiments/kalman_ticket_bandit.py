@@ -42,7 +42,7 @@ class KalmanTicketBandit:
         # Update
         self.mu[arm] = mu_pred + K * (reward - C_t * mu_pred)
         self.P[arm] = (1 - K * C_t) * P_pred
-        
+
         # Clip probabilities
         self.mu[arm] = np.clip(self.mu[arm], 0, 1)
         
@@ -121,6 +121,6 @@ if __name__ == "__main__":
     axs[2].grid(True)
 
     plt.tight_layout()
-    plt.show()
+    #plt.show()
 
     plt.savefig("plots/kalman_ticket_bandit.png")
