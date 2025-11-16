@@ -16,6 +16,7 @@ import pandas as pd
 import numpy as np
 from experiments.kalman_ticket_bandit import KalmanTicketBandit
 from experiments.beta_bandit import DecayingBetaBandit
+from experiments.RLSArm import RLSArm
 import matplotlib.pyplot as plt
 from visualizations import plot_moving_average
 import os
@@ -453,6 +454,118 @@ class DecayingBetaStrategy(MortyRescueStrategy):
         print(f"Total Steps: {final_status['steps_taken']}")
         print(f"Success Rate: {(final_status['morties_on_planet_jessica']/1000)*100:.2f}%")
 
+
+class RLSStrategy(MortyRescueStrategy):
+
+    def __init__(self, client: SphinxAPIClient, sampling_window=1, forgetting=0.9995):
+        super().__init__(client)
+        T = [10, 20, 200]
+        self.arms = [RLSArm(omega=2*np.pi/period, forgetting=forgetting) for period in T]
+        self.sampling_window = sampling_window
+
+    def explore_phase(self, trips_per_planet = 5, scaling = [1, 2, 8]):
+        trips = [s*trips_per_planet for s in scaling]
+        all_data = []
+        for planet, n in enumerate(trips):
+            df = self.collector.explore_planet(planet, n, morty_count=1)
+            all_data.append(df)
+            survived = df[["steps_taken", "survived"]].to_numpy()
+            for t, s in survived:
+                self.arms[planet].update(t, s)
+        all_data = pd.concat(all_data, ignore_index=True)
+        self.exploration_data = all_data
+        return all_data
+    
+    def execute_strategy(self):
+        print("\n=== EXECUTING RLS STRATEGY ===")
+        
+        status = self.client.get_status()
+        morties_remaining = status['morties_in_citadel']
+        steps_taken = status['steps_taken']
+        trips_made = 0
+
+        choices = []
+        preds = []
+        vars = []
+        new_sample = 0
+
+        while morties_remaining > 0:
+            # Thompson sampling
+            if new_sample % self.sampling_window == 0:
+                samples = []
+                for arm in self.arms:
+                    # approximate posterior: theta ~ N(theta, sigma2 * P)
+                    sigma2 = arm.est_noise_var()
+                    cov = sigma2 * arm.P
+                    # print(cov)
+                    # draw theta_sample
+                    try:
+                        theta_samp = np.random.multivariate_normal(arm.theta, cov)
+                    except Exception:
+                        theta_samp = arm.theta.copy()
+                    # compute p_hat from sampled theta
+                    xvec = arm.feature(steps_taken)
+                    z_samp = xvec.dot(theta_samp)
+                    p_samp = 0.5*(1.0 + z_samp)
+                    # p_est = arm.predict_p(steps_taken)
+                    # var_est = arm.predict_p_variance(steps_taken)
+                    # print(var_est)
+                    # p_samp = np.random.normal(p_est, np.sqrt(var_est))
+                    samples.append(p_samp)
+                planet = int(np.argmax(samples))
+            choices.append(planet)
+            new_sample += 1
+            p_estimate = self.arms[planet].predict_p(steps_taken)
+            morties_to_send = np.clip((p_estimate * 3).astype(int) + 1, 1, 3)  # proportional to the estimate
+            morties_to_send = min(morties_to_send, morties_remaining)
+            
+            # Send Morties
+            result = self.client.send_morties(planet, int(morties_to_send))
+            result["planet"] = planet
+            result["planet_name"] = self.client.get_planet_name(planet)
+            steps_taken = result["steps_taken"]
+            self.collector.trips_data.append(result)
+
+            # Update bandit state
+            self.arms[planet].update(steps_taken, result["survived"])
+
+            preds.append([arm.predict_p(steps_taken) for arm in self.arms])
+            vars.append([arm.predict_p_variance(steps_taken) for arm in self.arms])
+
+            morties_remaining = result['morties_in_citadel']
+            trips_made += 1
+            
+            if trips_made % 50 == 0:
+                print(f"  Progress: {trips_made} trips, "
+                      f"{result['morties_on_planet_jessica']} saved, "
+                      f"{morties_remaining} remaining")
+
+        # Final status
+        final_status = self.client.get_status()
+        print("\n=== FINAL RESULTS ===")
+        print(f"Morties Saved: {final_status['morties_on_planet_jessica']}")
+        print(f"Morties Lost: {final_status['morties_lost']}")
+        print(f"Total Steps: {final_status['steps_taken']}")
+        print(f"Success Rate: {(final_status['morties_on_planet_jessica']/1000)*100:.2f}%")
+
+        preds = np.array(preds)
+        stds = np.sqrt(np.array(vars))
+        ts = np.arange(preds.shape[0])
+
+        fig, axs = plt.subplots(3, 1, figsize=(10,12))
+
+        for i in range(3):
+            axs[i].plot(ts, preds[:,i], label="Estimated signal")
+            axs[i].fill_between(ts, preds[:, i] - 1.96*stds[:, i], preds[:, i] + 1.96*stds[:, i],
+                            color="orange", alpha=0.3, label="95% CI")
+            axs[i].set_title("Estimated sine wave with confidence bounds")
+            axs[i].set_xlabel("t")
+            axs[i].set_ylabel("x")
+            axs[i].legend()
+            axs[i].grid()
+
+        plt.show()
+
 def run_strategy(strategy_class, explore_trips: int = 30):
     """
     Run a complete strategy from exploration to execution.
@@ -512,4 +625,6 @@ if __name__ == "__main__":
     # df = strategy.collector.load_data(filename="data/kalman_real_0.csv")
     # plot_moving_average(df, window=50, save_path="plots/real_0.png")
 
-    run_strategy(DecayingBetaStrategy, explore_trips=0)
+    # run_strategy(DecayingBetaStrategy, explore_trips=0)
+
+    run_strategy(RLSStrategy, explore_trips=0)
