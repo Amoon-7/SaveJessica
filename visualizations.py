@@ -176,6 +176,96 @@ def plot_moving_average(df: pd.DataFrame, window: int = 10, save_path: Optional[
     plt.show()
 
 
+def plot_moving_average_multiple_runs(df: pd.DataFrame, window: int = 10, save_path: Optional[str] = None):
+    """
+    Plot moving average of survival rates for each planet (multiple runs),
+    aggregating survival across runs per (planet, trip), and including
+    a confidence interval using correct variance averaging.
+    """
+    fig, ax = plt.subplots(figsize=(14, 6))
+    
+    colors = {0: '#FF6B6B', 1: '#4ECDC4', 2: '#45B7D1'}
+
+    # --- Aggregate across runs: survival mean and std per trip ---
+    reduced = (
+        df.groupby(["planet", "trip_number"])
+        .agg(survived_mean=("survived", "mean"),
+             survived_std=("survived", "std"))
+        .reset_index()
+    )
+    
+    # Convert std to variance for later window operations
+    reduced["survived_var"] = reduced["survived_std"] ** 2
+    
+    # --- Process each planet ---
+    for planet in reduced["planet"].unique():
+        
+        pdata = reduced[reduced["planet"] == planet].sort_values("trip_number").copy()
+        planet_name = df.loc[df["planet"] == planet, "planet_name"].iloc[0] \
+                      if "planet_name" in df.columns else f"Planet {planet}"
+        
+        # ----- Moving average of mean survival -----
+        ma_mean = pdata["survived_mean"].rolling(window, min_periods=1).mean()
+        
+        # ----- Moving average of variance -----
+        ma_var = pdata["survived_var"].rolling(window, min_periods=1).mean()
+        
+        ma_std = ma_var ** 0.5          # convert variance to std
+        
+        # ----- Confidence Interval -----
+        k = 1.96                         # 95% CI
+        upper = ma_mean + k * ma_std
+        lower = ma_mean - k * ma_std
+        
+        # Convert to percentages
+        ma_mean_pct = ma_mean * 100
+        upper_pct = upper * 100
+        lower_pct = lower * 100
+
+        # ----- Plot moving average -----
+        ax.plot(
+            pdata["trip_number"],
+            ma_mean_pct,
+            label=f"{planet_name} (MA-{window})",
+            color=colors.get(planet, '#95E1D3'),
+            linewidth=2.5
+        )
+
+        # ----- Plot confidence interval -----
+        ax.fill_between(
+            pdata["trip_number"],
+            lower_pct,
+            upper_pct,
+            color=colors.get(planet, '#95E1D3'),
+            alpha=0.2
+        )
+        
+        # Optional: scatter raw per-trip means
+        ax.scatter(
+            pdata["trip_number"],
+            pdata["survived_mean"] * 100,
+            color=colors.get(planet, '#95E1D3'),
+            alpha=0.4,
+            s=25
+        )
+    
+    # --- Axis + formatting ---
+    ax.set_xlabel('Trip', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Survival Rate (%)', fontsize=12, fontweight='bold')
+    ax.set_title(f'Moving Average ({window} trips) of Survival Rates (Across Runs)',
+                 fontsize=14, fontweight='bold')
+    ax.legend(loc='best', fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim(-5, 105)
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Plot saved to {save_path}")
+    
+    plt.show()
+
+
 def plot_risk_evolution(df: pd.DataFrame, save_path: Optional[str] = None):
     """
     Plot how risk evolves over time for each planet (early vs late trips).
@@ -353,3 +443,8 @@ if __name__ == "__main__":
     print("  - plot_risk_evolution(df)")
     print("  - plot_episode_summary(df)")
     print("  - create_all_visualizations(df, output_dir='plots')")
+
+    df = pd.read_csv("data/explore_planets.csv")
+    plot_moving_average(df, window=10)
+    # plot_moving_average_multiple_runs(df, window=50)
+
