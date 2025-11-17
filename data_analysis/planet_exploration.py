@@ -122,7 +122,11 @@ def round_robin_exploration(save_path=None, plot=True):
 # averaging on multipe runs of explore planets
 def multiple_runs_exploration(save_path=None, num_runs=5, plot=True):
     all_runs = []
-    for run in range(num_runs):
+    initial_run = 0
+    if save_path is not None:
+        df = pd.read_csv(save_path)
+        initial_run = df['run'].max()  # +1-1
+    for run in range(initial_run, initial_run+num_runs):
         print(f"\n{'#'*60}")
         print(f"Starting Run {run + 1} of {num_runs}")
         print(f"{'#'*60}\n")
