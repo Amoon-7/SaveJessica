@@ -457,12 +457,16 @@ class DecayingBetaStrategy(MortyRescueStrategy):
 
 class RLSStrategy(MortyRescueStrategy):
 
-    def __init__(self, client: SphinxAPIClient, sampling_window=1, forgetting=0.9995, pessimism=1.96):
+    def __init__(self, client: SphinxAPIClient, sampling_window=1, forgetting=0.9995, pessimism=0.5, tu=0.8, te=0.85):
         super().__init__(client)
         T = [10, 20, 200]
         self.arms = [RLSArm(omega=2*np.pi/period, forgetting=forgetting) for period in T]
         self.sampling_window = sampling_window
         self.pessimism = pessimism
+        # tu: threshold for uncertain exploitation (2 morties)
+        # te: threshold for exploitation (3 morties)
+        self.tu = tu
+        self.te = te
 
     def explore_phase(self, trips_per_planet = 5, scaling = [1, 2, 8]):
         trips = [s*trips_per_planet for s in scaling]
@@ -476,6 +480,14 @@ class RLSStrategy(MortyRescueStrategy):
         all_data = pd.concat(all_data, ignore_index=True)
         self.exploration_data = all_data
         return all_data
+    
+    def morty_activation(self, prob):
+        if prob < self.tu:
+            return 1
+        elif prob < self.te:
+            return 2
+        else:
+            return 3
     
     def execute_strategy(self):
         print("\n=== EXECUTING RLS STRATEGY ===")
@@ -519,9 +531,7 @@ class RLSStrategy(MortyRescueStrategy):
             p_estimate = self.arms[planet].predict_p(steps_taken)
             sig_estimate = np.sqrt(self.arms[planet].predict_p_variance(steps_taken))
             # proportional to the estimate, pessimistic in terms of variance
-            morties_to_send = np.clip(
-                ((p_estimate - self.pessimism * sig_estimate) * 3).astype(int) + 1, 
-                1, 3)
+            morties_to_send = self.morty_activation(p_estimate - self.pessimism * sig_estimate)
             morties_to_send = min(morties_to_send, morties_remaining)
             
             choices[planet].append((steps_taken, morties_to_send))
