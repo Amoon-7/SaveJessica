@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 class RLSArm:
-    def __init__(self, omega, forgetting=1.0, delta=1e3):
+    def __init__(self, omega, forgetting=1.0, delta=10):
         # theta = [alpha, beta] for z ~ alpha*sin + beta*cos
         self.omega = omega
         self.theta = np.zeros(2)

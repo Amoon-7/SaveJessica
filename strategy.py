@@ -457,11 +457,12 @@ class DecayingBetaStrategy(MortyRescueStrategy):
 
 class RLSStrategy(MortyRescueStrategy):
 
-    def __init__(self, client: SphinxAPIClient, sampling_window=1, forgetting=0.9995):
+    def __init__(self, client: SphinxAPIClient, sampling_window=1, forgetting=0.9995, pessimism=1.96):
         super().__init__(client)
         T = [10, 20, 200]
         self.arms = [RLSArm(omega=2*np.pi/period, forgetting=forgetting) for period in T]
         self.sampling_window = sampling_window
+        self.pessimism = pessimism
 
     def explore_phase(self, trips_per_planet = 5, scaling = [1, 2, 8]):
         trips = [s*trips_per_planet for s in scaling]
@@ -484,9 +485,9 @@ class RLSStrategy(MortyRescueStrategy):
         steps_taken = status['steps_taken']
         trips_made = 0
 
-        choices = []
-        preds = []
-        vars = []
+        choices = [[],[],[]]
+        preds = [[arm.predict_p(steps_taken) for arm in self.arms]]
+        vars = [[arm.predict_p_variance(steps_taken) for arm in self.arms]]
         new_sample = 0
 
         while morties_remaining > 0:
@@ -513,12 +514,18 @@ class RLSStrategy(MortyRescueStrategy):
                     # p_samp = np.random.normal(p_est, np.sqrt(var_est))
                     samples.append(p_samp)
                 planet = int(np.argmax(samples))
-            choices.append(planet)
+
             new_sample += 1
             p_estimate = self.arms[planet].predict_p(steps_taken)
-            morties_to_send = np.clip((p_estimate * 3).astype(int) + 1, 1, 3)  # proportional to the estimate
+            sig_estimate = np.sqrt(self.arms[planet].predict_p_variance(steps_taken))
+            # proportional to the estimate, pessimistic in terms of variance
+            morties_to_send = np.clip(
+                ((p_estimate - self.pessimism * sig_estimate) * 3).astype(int) + 1, 
+                1, 3)
             morties_to_send = min(morties_to_send, morties_remaining)
             
+            choices[planet].append((steps_taken, morties_to_send))
+
             # Send Morties
             result = self.client.send_morties(planet, int(morties_to_send))
             result["planet"] = planet
@@ -527,7 +534,7 @@ class RLSStrategy(MortyRescueStrategy):
             self.collector.trips_data.append(result)
 
             # Update bandit state
-            self.arms[planet].update(steps_taken, result["survived"])
+            self.arms[planet].update(steps_taken-1, result["survived"])
 
             preds.append([arm.predict_p(steps_taken) for arm in self.arms])
             vars.append([arm.predict_p_variance(steps_taken) for arm in self.arms])
@@ -550,21 +557,27 @@ class RLSStrategy(MortyRescueStrategy):
 
         preds = np.array(preds)
         stds = np.sqrt(np.array(vars))
-        ts = np.arange(preds.shape[0])
+        choices = [np.array(c) for c in choices]
+        ts = np.arange(0, preds.shape[0])
 
         fig, axs = plt.subplots(3, 1, figsize=(10,12))
 
         for i in range(3):
-            axs[i].plot(ts, preds[:,i], label="Estimated signal")
+            c = choices[i]
+            axs[i].scatter(c[:,0], preds[c[:,0],i], label="Actions",
+                           color=[f"C{color}" for color in c[:,1]], alpha=0.33*c[:,1])
+            axs[i].plot(ts, preds[:,i], label="Estimated signal", color="blue")
             axs[i].fill_between(ts, preds[:, i] - 1.96*stds[:, i], preds[:, i] + 1.96*stds[:, i],
                             color="orange", alpha=0.3, label="95% CI")
             axs[i].set_title("Estimated sine wave with confidence bounds")
             axs[i].set_xlabel("t")
             axs[i].set_ylabel("x")
+            axs[i].set_ylim(-0.5, 1.5)
             axs[i].legend()
             axs[i].grid()
 
-        plt.show()
+        # plt.show()
+        plt.savefig("plots/RLS_estimates.svg")
 
 def run_strategy(strategy_class, explore_trips: int = 30):
     """
