@@ -3,10 +3,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 class RLSArm:
-    def __init__(self, omega, forgetting=1.0, delta=1):
+    def __init__(self, omega, theta0=np.zeros(2), forgetting=1.0, delta=1):
         # theta = [alpha, beta] for z ~ alpha*sin + beta*cos
         self.omega = omega
-        self.theta = np.zeros(2)
+        self.theta = theta0
         self.P = np.eye(2) * delta
         self.lambda_ = forgetting
         self.n = 0

@@ -460,6 +460,8 @@ class RLSStrategy(MortyRescueStrategy):
     def __init__(self, client: SphinxAPIClient, sampling_window=1, forgetting=0.9995, pessimism=0.5, tu=0.8, te=0.85):
         super().__init__(client)
         T = [10, 20, 200]
+        # ESTIMATED_PHIS = np.array([-0.18064311, -0.06519789,  0.65443256])
+        # ESTIMATED_THETAS = [np.array((np.cos(phi), -np.sin(phi))) for phi in ESTIMATED_PHIS]
         self.arms = [RLSArm(omega=2*np.pi/period, forgetting=forgetting) for period in T]
         self.sampling_window = sampling_window
         self.pessimism = pessimism
