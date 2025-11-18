@@ -20,6 +20,7 @@ from experiments.RLSArm import RLSArm
 import matplotlib.pyplot as plt
 from visualizations import plot_moving_average
 import os
+from experiments.RLS_regularized import RLSArmRegularized
 
 class MortyRescueStrategy(ABC):
     """Abstract base class for implementing rescue strategies."""
@@ -457,7 +458,7 @@ class DecayingBetaStrategy(MortyRescueStrategy):
 
 class RLSStrategy(MortyRescueStrategy):
 
-    def __init__(self, client: SphinxAPIClient, sampling_window=1, forgetting=0.9995, pessimism=0.5, tu=0.8, te=0.85):
+    def __init__(self, client: SphinxAPIClient, sampling_window=1, forgetting=0.9999, pessimism=0.3, tu=0.75, te=0.82):
         super().__init__(client)
         T = [10, 20, 200]
         # ESTIMATED_PHIS = np.array([-0.18064311, -0.06519789,  0.65443256])
@@ -591,6 +592,172 @@ class RLSStrategy(MortyRescueStrategy):
         # plt.show()
         plt.savefig("plots/RLS_estimates.svg")
 
+
+class RLSStrategyConservative(MortyRescueStrategy):
+
+    def __init__(self, client: SphinxAPIClient, 
+                 sampling_window=1, 
+                 forgetting=0.9995,      
+                 pessimism=0.45,         # Slightly lowered
+                 tu=0.78,                # Slightly lowered
+                 te=0.85):               
+        super().__init__(client)
+        
+        T = [10, 20, 200]
+        
+        self.arms = [RLSArmRegularized(omega=2*np.pi/period, 
+                                    forgetting=forgetting,
+                                    regularization=1e-6) 
+                     for period in T]
+        
+        self.sampling_window = sampling_window
+        self.pessimism = pessimism
+        self.tu = tu
+        self.te = te
+
+    def morty_activation(self, prob, variance, morties_remaining, trips_made):
+        
+        # Calculate adjusted probability with pessimism
+        adjusted_prob = prob - self.pessimism * np.sqrt(variance)
+        
+        # SMALL scarcity bonus only when >700 morties remain
+        if morties_remaining > 700:
+            scarcity_bonus = 0.03  # Very conservative
+        elif morties_remaining > 500:
+            scarcity_bonus = 0.02
+        else:
+            scarcity_bonus = 0.0
+        
+        adjusted_prob += scarcity_bonus
+        adjusted_prob = np.clip(adjusted_prob, 0.0, 1.0)
+        
+        # Use configured thresholds
+        if adjusted_prob > self.te:
+            return 3
+        elif adjusted_prob > self.tu:
+            return 2
+        else:
+            return 1
+
+    def explore_phase(self, trips_per_planet=5, scaling=[1, 2, 8]):
+        trips = [s*trips_per_planet for s in scaling]
+        all_data = []
+        for planet, n in enumerate(trips):
+            df = self.collector.explore_planet(planet, n, morty_count=1)
+            all_data.append(df)
+            survived = df[["steps_taken", "survived"]].to_numpy()
+            for t, s in survived:
+                self.arms[planet].update(t, s)
+        all_data = pd.concat(all_data, ignore_index=True)
+        self.exploration_data = all_data
+        return all_data
+
+    def execute_strategy(self):
+        print("\n=== EXECUTING RLS CONSERVATIVE STRATEGY ===")
+        
+        status = self.client.get_status()
+        morties_remaining = status['morties_in_citadel']
+        steps_taken = status['steps_taken']
+        trips_made = 0
+
+        choices = [[], [], []]
+        preds = [[arm.predict_p(steps_taken) for arm in self.arms]]
+        vars = [[arm.predict_p_variance(steps_taken) for arm in self.arms]]
+        new_sample = 0
+
+        while morties_remaining > 0:
+            if new_sample % self.sampling_window == 0:
+                samples = []
+                for arm in self.arms:
+                    theta_samp = arm.sample_theta()
+                    
+                    xvec = arm.feature(steps_taken)
+                    z_samp = xvec.dot(theta_samp)
+                    p_samp = np.clip(0.5*(1.0 + z_samp), 0.01, 0.99)
+                    samples.append(p_samp)
+                
+                planet = int(np.argmax(samples))
+
+            new_sample += 1
+            p_estimate = self.arms[planet].predict_p(steps_taken)
+            variance_estimate = self.arms[planet].predict_p_variance(steps_taken)
+            
+            morties_to_send = self.morty_activation(
+                p_estimate, 
+                variance_estimate,
+                morties_remaining,
+                trips_made
+            )
+            morties_to_send = min(morties_to_send, morties_remaining)
+            
+            choices[planet].append((steps_taken, morties_to_send))
+
+            # Send Morties
+            result = self.client.send_morties(planet, int(morties_to_send))
+            result["planet"] = planet
+            result["planet_name"] = self.client.get_planet_name(planet)
+            steps_taken = result["steps_taken"]
+            self.collector.trips_data.append(result)
+
+            # Update bandit state
+            self.arms[planet].update(steps_taken-1, result["survived"])
+
+            preds.append([arm.predict_p(steps_taken) for arm in self.arms])
+            vars.append([arm.predict_p_variance(steps_taken) for arm in self.arms])
+
+            morties_remaining = result['morties_in_citadel']
+            trips_made += 1
+            
+            if trips_made % 50 == 0:
+                print(f"  Progress: {trips_made} trips, "
+                      f"{result['morties_on_planet_jessica']} saved, "
+                      f"{morties_remaining} remaining")
+
+        # Final status
+        final_status = self.client.get_status()
+        print("\n=== FINAL RESULTS ===")
+        print(f"Morties Saved: {final_status['morties_on_planet_jessica']}")
+        print(f"Morties Lost: {final_status['morties_lost']}")
+        print(f"Total Steps: {final_status['steps_taken']}")
+        print(f"Success Rate: {(final_status['morties_on_planet_jessica']/1000)*100:.2f}%")
+
+        # Visualization
+        preds = np.array(preds)
+        stds = np.sqrt(np.array(vars))
+        choices = [np.array(c) if len(c) > 0 else np.array([]).reshape(0, 2) for c in choices]
+        ts = np.arange(0, preds.shape[0])
+
+        fig, axs = plt.subplots(3, 1, figsize=(12, 12))
+
+        planet_names = ["Planet A (T=10)", "Planet B (T=20)", "Planet C (T=200)"]
+        
+        for i in range(3):
+            c = choices[i]
+            if len(c) > 0:
+                axs[i].scatter(c[:,0], preds[c[:,0].astype(int), i], 
+                              label="Actions",
+                              c=c[:,1], cmap='RdYlGn', 
+                              alpha=0.6, s=50, vmin=1, vmax=3)
+            axs[i].plot(ts, preds[:,i], label="Estimated signal", 
+                       color="blue", linewidth=2)
+            axs[i].fill_between(ts, 
+                               preds[:, i] - 1.96*stds[:, i], 
+                               preds[:, i] + 1.96*stds[:, i],
+                               color="orange", alpha=0.3, label="95% CI")
+            axs[i].set_title(f"{planet_names[i]} - Estimated Survival Pattern")
+            axs[i].set_xlabel("Time Step")
+            axs[i].set_ylabel("Survival Probability")
+            axs[i].set_ylim(-0.1, 1.1)
+            axs[i].legend(loc='upper right')
+            axs[i].grid(alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig("plots/RLS_conservative_improved.svg")
+        print("\nVisualization saved to: plots/RLS_conservative_improved.svg")
+
+
+
+
 def run_strategy(strategy_class, explore_trips: int = 30):
     """
     Run a complete strategy from exploration to execution.
@@ -652,4 +819,4 @@ if __name__ == "__main__":
 
     # run_strategy(DecayingBetaStrategy, explore_trips=0)
 
-    run_strategy(RLSStrategy, explore_trips=0)
+    run_strategy(RLSStrategyConservative, explore_trips=0)
