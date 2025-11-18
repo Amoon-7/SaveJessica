@@ -3,7 +3,13 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 class RLSArmRegularized:
-    
+    """ 
+    This version is an improved RLS arm with enhanced numerical stability.
+    Key improvements:
+    - Regularization added to covariance matrix P in order to prevent singularity
+    - Stable theta sampling using Cholesky decomposition
+    These enhancements ensure mainly stable performance. They don't improve the results too much.
+    """
     def __init__(self, omega, forgetting=1.0, delta=1, regularization=1e-6):
         # theta = [alpha, beta] for z ~ alpha*sin + beta*cos
         self.omega = omega
@@ -61,9 +67,10 @@ class RLSArmRegularized:
         total_var = 0.25 * (theta_var + sigma2)  # scale to p
         return total_var
     
+    # mainly for phase analysis
     def get_phase(self):
         alpha, beta = self.theta
-        # recall: z = alpha*sin + beta*cos = R sin(omega t - phi)
+        # z = alpha*sin + beta*cos = R sin(omega t - phi)
         phi = np.arctan2(-beta, alpha)
         R = np.sqrt(alpha*alpha + beta*beta)
         return phi, R
@@ -83,7 +90,7 @@ class RLSArmRegularized:
         return cov_stable
     
     def sample_theta(self):
-        """Sample from posterior distribution of theta"""
+        """ Sample from posterior distribution of theta """
         try:
             cov = self.get_stable_covariance()
             L = np.linalg.cholesky(cov)
@@ -101,17 +108,16 @@ def moving_average(a, n=MA_WINDOW):
     ret = ret[n-1:] / n
     return np.pad(ret, (n//2, n - n//2 - 1), mode='constant', constant_values=np.nan)
 
-"""
+
 if __name__ == "__main__":
-    # Test the RLS arm version 2
-    df = pd.read_csv("../data/multiple_runs_exploration.csv")
+    df = pd.read_csv("../data/multiple_regularized_runs_exploration.csv")
     run = 2
     sampling_period = 1
     T = 1000
     planet = df[(df['planet'] == 0) & (df['run'] == run)][['trip_number', "survived"]].to_numpy()
     frequency = 2*np.pi/10
 
-    arm = RLSArmImproved(frequency, regularization=1e-6)
+    arm = RLSArmRegularized(frequency, regularization=1e-6)
     ts = []
     preds = []
     vars = []
@@ -137,4 +143,3 @@ if __name__ == "__main__":
     plt.grid(alpha=0.3)
     plt.ylim(-0.1, 1.1)
     plt.show()
-"""
