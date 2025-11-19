@@ -35,9 +35,9 @@ wheels/
 data/
 
 # Plots
-# *.png
-# *.jpg
-# plots/
+*.png
+*.jpg
+plots/
 
 # IDE
 .vscode/
